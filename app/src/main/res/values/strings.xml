@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PenguinPlayer</string>
+    <string name="select_storage">ストレージを選択</string>
+    <string name="playlist">PLAYLIST</string>
+    <string name="file_browser_title">ファイルを選択</string>
+    <string name="remove_from_playlist">プレイリストから除外</string>
+    <string name="delete_file">ファイルを削除</string>
+    <string name="delete_confirm_msg">このファイルをストレージから削除しますか？\nこの操作は元に戻せません。</string>
+    <string name="delete">削除</string>
+    <string name="cancel">キャンセル</string>
+    <string name="add_all">全曲追加</string>
+    <string name="add_selected_zero">追加（0曲）</string>
+    <string name="sort_title">並び順</string>
+    <string name="sort_name_asc">ファイル名（A→Z）</string>
+    <string name="sort_name_desc">ファイル名（Z→A）</string>
+    <string name="sort_track_name_asc">トラック名（A→Z）</string>
+    <string name="sort_track_name_desc">トラック名（Z→A）</string>
+    <string name="sort_size_asc">サイズ（小→大）</string>
+    <string name="sort_size_desc">サイズ（大→小）</string>
+    <string name="sort_format">フォーマット</string>
+    <string name="sort_track_num_asc">トラック番号（昇順）</string>
+    <string name="sort_track_num_desc">トラック番号（降順）</string>
+    <string name="sort_modified_desc">更新日時（新しい順）</string>
+    <string name="sort_modified_asc">更新日時（古い順）</string>
+    <string name="sort_created_desc">作成日時（新しい順）</string>
+    <string name="sort_created_asc">作成日時（古い順）</string>
+    <string name="initial_folder_title">最初に開くフォルダ</string>
+    <string name="initial_folder_message">「ストレージを選択」ボタンで最初に開くフォルダのパスを設定します。</string>
+    <string name="confirm_ok">OK</string>
+</resources>

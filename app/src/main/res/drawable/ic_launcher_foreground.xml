@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Body (dark navy) -->
+    <path
+        android:fillColor="#1A1A2E"
+        android:pathData="M54,15 C35,15 20,32 20,54 C20,78 35,95 54,95 C73,95 88,78 88,54 C88,32 73,15 54,15Z"/>
+
+    <!-- White belly -->
+    <path
+        android:fillColor="#F5F5F5"
+        android:pathData="M54,34 C43,34 34,44 34,56 C34,68 43,78 54,78 C65,78 74,68 74,56 C74,44 65,34 54,34Z"/>
+
+    <!-- Left eye (black) -->
+    <path
+        android:fillColor="#1A1A2E"
+        android:pathData="M43,52 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0Z"/>
+
+    <!-- Right eye (black) -->
+    <path
+        android:fillColor="#1A1A2E"
+        android:pathData="M65,52 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0Z"/>
+
+    <!-- Left eye highlight -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M42,49 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0Z"/>
+
+    <!-- Right eye highlight -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M64,49 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0Z"/>
+
+    <!-- Beak (orange) -->
+    <path
+        android:fillColor="#FF8F00"
+        android:pathData="M48,59 L54,68 L60,59Z"/>
+
+    <!-- Left foot -->
+    <path
+        android:fillColor="#FF8F00"
+        android:pathData="M38,90 L30,104 L46,104Z"/>
+
+    <!-- Right foot -->
+    <path
+        android:fillColor="#FF8F00"
+        android:pathData="M70,90 L62,104 L78,104Z"/>
+
+</vector>
