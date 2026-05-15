@@ -39,4 +39,10 @@
     <string name="resume_settings_title">長い曲の再生位置を記憶</string>
     <string name="resume_settings_msg">この分数以上の曲は再生位置を記憶し、次回から続きから再生します。</string>
     <string name="resume_settings_unit">分以上</string>
+    <string name="gme_duration_settings">レトロ音楽の最大再生時間</string>
+    <string name="gme_duration_settings_title">時間情報なし形式の最大再生時間</string>
+    <string name="gme_duration_settings_msg">NSF・GBS・HES 等、時間情報を持たない形式を何分で停止するか設定します。内蔵時間があるフォーマット（SPC・VGM 等）はその値を優先します。</string>
+    <string name="gme_loading">トラックを読み込み中…</string>
+    <string name="gme_open_error">ファイルを開けませんでした</string>
+    <string name="gme_add">追加</string>
 </resources>

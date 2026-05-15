@@ -52,8 +52,12 @@ data class TrackItem(
     val name: String,
     val info: String,
     val uri: String = "",
-    var isPlaying: Boolean = false
-)
+    var isPlaying: Boolean = false,
+    val gmeTrackIndex: Int = -1,
+    val parentFileName: String = ""
+) {
+    val isGme get() = gmeTrackIndex >= 0
+}
 
 enum class PlaybackMode { NORMAL, REPEAT_ONE, REPEAT_ALL, SHUFFLE }
 
@@ -72,6 +76,8 @@ class MainActivity : AppCompatActivity() {
     private val tracks = mutableListOf<TrackItem>()
 
     private var mediaPlayer: MediaPlayer? = null
+    private var gmePlayer: GmePlayer? = null
+    private var playToken = 0
     private var currentTrackIndex = -1
     private var isSeekBarDragging = false
     private var seekSaveTick = 0
@@ -107,19 +113,21 @@ class MainActivity : AppCompatActivity() {
     private val seekHandler = Handler(Looper.getMainLooper())
     private val seekRunnable = object : Runnable {
         override fun run() {
-            val mp = mediaPlayer ?: return
-            if (mp.isPlaying && !isSeekBarDragging) {
-                val pos = mp.currentPosition
-                seekBar.progress = pos
-                tvCurrentTime.text = formatTime(pos)
-                seekSaveTick++
-                if (seekSaveTick >= 20) {   // 10秒ごとに保存
-                    seekSaveTick = 0
-                    runCatching {
-                        saveResumeIfLong(
-                            tracks.getOrNull(currentTrackIndex)?.uri ?: "",
-                            pos, mp.duration
-                        )
+            if (!isSeekBarDragging) {
+                val mp = mediaPlayer
+                if (mp != null && mp.isPlaying) {
+                    val pos = mp.currentPosition
+                    seekBar.progress = pos
+                    tvCurrentTime.text = formatTime(pos)
+                    seekSaveTick++
+                    if (seekSaveTick >= 20) {
+                        seekSaveTick = 0
+                        runCatching {
+                            saveResumeIfLong(
+                                tracks.getOrNull(currentTrackIndex)?.uri ?: "",
+                                pos, mp.duration
+                            )
+                        }
                     }
                 }
             }
@@ -145,7 +153,13 @@ class MainActivity : AppCompatActivity() {
                 }
                 val startIndex = tracks.size
                 files.forEach { audioFile ->
-                    tracks.add(TrackItem(audioFile.trackName, audioFile.format, audioFile.uri))
+                    tracks.add(TrackItem(
+                        name = audioFile.trackName,
+                        info = audioFile.format,
+                        uri = audioFile.uri,
+                        gmeTrackIndex = audioFile.gmeTrackIndex,
+                        parentFileName = audioFile.parentFileName
+                    ))
                 }
                 adapter.notifyDataSetChanged()
                 savePlaylist()
@@ -191,8 +205,11 @@ class MainActivity : AppCompatActivity() {
             override fun onStartTrackingTouch(sb: SeekBar) { isSeekBarDragging = true }
             override fun onStopTrackingTouch(sb: SeekBar) {
                 isSeekBarDragging = false
-                mediaPlayer?.let { mp ->
-                    if (android.os.Build.VERSION.SDK_INT >= 26) {
+                val gp = gmePlayer
+                val mp = mediaPlayer
+                when {
+                    gp != null -> gp.seekTo(sb.progress)
+                    mp != null -> if (android.os.Build.VERSION.SDK_INT >= 26) {
                         mp.seekTo(sb.progress.toLong(), android.media.MediaPlayer.SEEK_CLOSEST)
                     } else {
                         mp.seekTo(sb.progress)
@@ -212,9 +229,11 @@ class MainActivity : AppCompatActivity() {
         findViewById<ImageButton>(R.id.btnSkipPrev).setOnClickListener { playPrev() }
         findViewById<ImageButton>(R.id.btnSkipNext).setOnClickListener { playNext() }
         findViewById<ImageButton>(R.id.btnRewind).setOnClickListener {
+            gmePlayer?.let { it.seekTo(maxOf(0, it.currentPosition - 10000)); return@setOnClickListener }
             mediaPlayer?.let { it.seekTo(maxOf(0, it.currentPosition - 10000)) }
         }
         findViewById<ImageButton>(R.id.btnFastForward).setOnClickListener {
+            gmePlayer?.let { it.seekTo(it.currentPosition + 10000); return@setOnClickListener }
             mediaPlayer?.let { it.seekTo(minOf(it.duration, it.currentPosition + 10000)) }
         }
 
@@ -291,11 +310,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean = when (item.itemId) {
-        R.id.action_folder_settings  -> { folderPickerLauncher.launch(null); true }
-        R.id.action_sort_playlist    -> { showPlaylistSortDialog(); true }
-        R.id.action_clear_playlist   -> { confirmClearPlaylist(); true }
-        R.id.action_sleep_timer      -> { showSleepTimerDialog(); true }
-        R.id.action_resume_settings  -> { showResumeSettings(); true }
+        R.id.action_folder_settings       -> { folderPickerLauncher.launch(null); true }
+        R.id.action_sort_playlist         -> { showPlaylistSortDialog(); true }
+        R.id.action_clear_playlist        -> { confirmClearPlaylist(); true }
+        R.id.action_sleep_timer           -> { showSleepTimerDialog(); true }
+        R.id.action_resume_settings       -> { showResumeSettings(); true }
+        R.id.action_gme_duration_settings -> { showGmeDurationSettings(); true }
         else -> super.onOptionsItemSelected(item)
     }
 
@@ -312,6 +332,8 @@ class MainActivity : AppCompatActivity() {
         saveCurrentResumePosition()
         mediaPlayer?.release()
         mediaPlayer = null
+        val gp = gmePlayer; gmePlayer = null
+        gp?.let { Thread { it.release() }.start() }
         unregisterReceiver(mediaControlReceiver)
         sleepRunnable?.let { sleepHandler.removeCallbacks(it) }
         cancelNotification()
@@ -321,9 +343,7 @@ class MainActivity : AppCompatActivity() {
     private fun saveCurrentResumePosition() {
         val mp = mediaPlayer ?: return
         val uri = tracks.getOrNull(currentTrackIndex)?.uri ?: return
-        runCatching {
-            saveResumeIfLong(uri, mp.currentPosition, mp.duration)
-        }
+        runCatching { saveResumeIfLong(uri, mp.currentPosition, mp.duration) }
     }
 
     // --- Playback ---
@@ -342,29 +362,28 @@ class MainActivity : AppCompatActivity() {
 
         val track = tracks[currentTrackIndex]
         tvTrackTitle.text = track.name
-        tvFileName.text = track.info
+        tvFileName.text = if (track.isGme) "${track.info} · ${track.parentFileName}" else track.info
 
         seekHandler.removeCallbacks(seekRunnable)
         seekSaveTick = 0
 
-        // 前のトラックの再生位置を保存してから解放
         val oldMp = mediaPlayer
         if (oldMp != null && oldIndex in tracks.indices) {
-            runCatching {
-                saveResumeIfLong(
-                    tracks[oldIndex].uri,
-                    oldMp.currentPosition,
-                    oldMp.duration
-                )
-            }
+            runCatching { saveResumeIfLong(tracks[oldIndex].uri, oldMp.currentPosition, oldMp.duration) }
         }
         oldMp?.release()
         mediaPlayer = null
 
-        if (track.uri.isEmpty()) return
+        val oldGp = gmePlayer; gmePlayer = null
+        oldGp?.let { gp -> Thread { gp.release() }.start() }
 
+        if (track.uri.isEmpty()) return
         requestAudioFocus()
 
+        if (track.isGme) playWithGme(track) else playWithMediaPlayer(track)
+    }
+
+    private fun playWithMediaPlayer(track: TrackItem) {
         mediaPlayer = MediaPlayer().also { mp ->
             mp.setDataSource(this, Uri.parse(track.uri))
             mp.prepareAsync()
@@ -373,12 +392,10 @@ class MainActivity : AppCompatActivity() {
                 fabPlayPause.setImageResource(android.R.drawable.ic_media_pause)
                 tvTotalTime.text = formatTime(it.duration)
                 seekBar.max = it.duration
-
-                // リジューム位置の復元
                 val thresholdMs = resumeThresholdMin * 60_000L
                 val savedPos = if (it.duration >= thresholdMs) getResumePosition(track.uri) else 0
                 if (savedPos in 1 until it.duration) {
-                    if (android.os.Build.VERSION.SDK_INT >= 26) {
+                    if (Build.VERSION.SDK_INT >= 26) {
                         it.seekTo(savedPos.toLong(), MediaPlayer.SEEK_CLOSEST)
                     } else {
                         it.seekTo(savedPos)
@@ -402,6 +419,50 @@ class MainActivity : AppCompatActivity() {
             }
             mp.setOnErrorListener { _, _, _ -> false }
         }
+    }
+
+    private fun playWithGme(track: TrackItem) {
+        val token = ++playToken
+        val player = GmePlayer(this)
+
+        player.listener = object : GmePlayer.Listener {
+            override fun onPositionChanged(posMs: Int, durationMs: Int) {
+                if (!isSeekBarDragging) {
+                    seekBar.progress = posMs
+                    tvCurrentTime.text = formatTime(posMs)
+                }
+            }
+            override fun onCompletion() {
+                playNext(fromCompletion = true)
+            }
+            override fun onError(message: String) {
+                Toast.makeText(this@MainActivity, "再生エラー: $message", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        Thread {
+            val trackInfos = try { player.openFile(Uri.parse(track.uri)) } catch (_: Exception) { null }
+            runOnUiThread {
+                if (token != playToken) { Thread { player.release() }.start(); return@runOnUiThread }
+                if (trackInfos == null) {
+                    Toast.makeText(this, "ファイルを開けませんでした", Toast.LENGTH_SHORT).show()
+                    return@runOnUiThread
+                }
+                val defaultDur = getSharedPreferences("penguin_player", Context.MODE_PRIVATE)
+                    .getInt("gme_default_duration_ms", 180_000)
+                val embeddedLen = trackInfos.getOrNull(track.gmeTrackIndex)?.durationMs ?: -1
+                val durMs = if (embeddedLen > 0) embeddedLen else defaultDur
+
+                gmePlayer = player
+                seekBar.max = durMs
+                tvTotalTime.text = formatTime(durMs)
+                seekBar.progress = 0
+                tvCurrentTime.text = "0:00"
+                fabPlayPause.setImageResource(android.R.drawable.ic_media_pause)
+                player.playTrack(track.gmeTrackIndex, durMs)
+                updateNotification()
+            }
+        }.start()
     }
 
     private fun playNext(fromCompletion: Boolean = false) {
@@ -433,6 +494,8 @@ class MainActivity : AppCompatActivity() {
         seekHandler.removeCallbacks(seekRunnable)
         mediaPlayer?.release()
         mediaPlayer = null
+        val gp = gmePlayer; gmePlayer = null
+        gp?.let { Thread { it.release() }.start() }
         fabPlayPause.setImageResource(android.R.drawable.ic_media_play)
         tracks.getOrNull(currentTrackIndex)?.isPlaying = false
         if (currentTrackIndex in tracks.indices) adapter.notifyItemChanged(currentTrackIndex)
@@ -524,24 +587,59 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun showGmeDurationSettings() {
+        val prefs = getSharedPreferences("penguin_player", Context.MODE_PRIVATE)
+        val currentMin = prefs.getInt("gme_default_duration_ms", 180_000) / 60_000
+        val input = android.widget.EditText(this).apply {
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            setText(currentMin.toString())
+            selectAll()
+            setPadding(60, 40, 60, 20)
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.gme_duration_settings_title))
+            .setMessage(getString(R.string.gme_duration_settings_msg))
+            .setView(input)
+            .setPositiveButton(getString(R.string.confirm_ok)) { _, _ ->
+                val min = input.text.toString().toIntOrNull()?.coerceAtLeast(1) ?: 3
+                prefs.edit().putInt("gme_default_duration_ms", min * 60_000).apply()
+            }
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
+    }
+
     // --- Play/Pause toggle ---
 
     private fun togglePlayPause() {
+        val gp = gmePlayer
         val mp = mediaPlayer
-        if (mp != null) {
-            if (mp.isPlaying) {
-                mp.pause()
-                fabPlayPause.setImageResource(android.R.drawable.ic_media_play)
-                seekHandler.removeCallbacks(seekRunnable)
-            } else {
-                mp.start()
-                fabPlayPause.setImageResource(android.R.drawable.ic_media_pause)
-                seekHandler.post(seekRunnable)
+        when {
+            gp != null -> {
+                if (gp.isPlaying) {
+                    gp.pause()
+                    fabPlayPause.setImageResource(android.R.drawable.ic_media_play)
+                } else {
+                    gp.resume()
+                    fabPlayPause.setImageResource(android.R.drawable.ic_media_pause)
+                }
+                updateNotification()
             }
-            updateNotification()
-        } else if (tracks.isNotEmpty()) {
-            val idx = if (currentTrackIndex in tracks.indices) currentTrackIndex else 0
-            play(idx)
+            mp != null -> {
+                if (mp.isPlaying) {
+                    mp.pause()
+                    fabPlayPause.setImageResource(android.R.drawable.ic_media_play)
+                    seekHandler.removeCallbacks(seekRunnable)
+                } else {
+                    mp.start()
+                    fabPlayPause.setImageResource(android.R.drawable.ic_media_pause)
+                    seekHandler.post(seekRunnable)
+                }
+                updateNotification()
+            }
+            tracks.isNotEmpty() -> {
+                val idx = if (currentTrackIndex in tracks.indices) currentTrackIndex else 0
+                play(idx)
+            }
         }
     }
 
@@ -621,7 +719,7 @@ class MainActivity : AppCompatActivity() {
     private fun updateNotification() {
         if (!::mediaSession.isInitialized) return
         val track = tracks.getOrNull(currentTrackIndex) ?: run { cancelNotification(); return }
-        val isPlaying = mediaPlayer?.isPlaying == true
+        val isPlaying = mediaPlayer?.isPlaying == true || gmePlayer?.isPlaying == true
 
         mediaSession.setMetadata(
             MediaMetadataCompat.Builder()
@@ -633,7 +731,7 @@ class MainActivity : AppCompatActivity() {
             PlaybackStateCompat.Builder()
                 .setState(
                     if (isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED,
-                    mediaPlayer?.currentPosition?.toLong() ?: 0L,
+                    mediaPlayer?.currentPosition?.toLong() ?: gmePlayer?.currentPosition?.toLong() ?: 0L,
                     playbackSpeed
                 )
                 .setActions(
@@ -817,11 +915,13 @@ class MainActivity : AppCompatActivity() {
         val prefs = getSharedPreferences("penguin_player", Context.MODE_PRIVATE)
         val count = prefs.getInt("playlist_count", -1)
         for (i in 0 until count) {
-            val name    = prefs.getString("track_name_$i", null) ?: continue
-            val info    = prefs.getString("track_info_$i", "") ?: ""
-            val uri     = prefs.getString("track_uri_$i", "") ?: ""
-            val playing = prefs.getBoolean("track_playing_$i", false)
-            tracks.add(TrackItem(name, info, uri, playing))
+            val name       = prefs.getString("track_name_$i", null) ?: continue
+            val info       = prefs.getString("track_info_$i", "") ?: ""
+            val uri        = prefs.getString("track_uri_$i", "") ?: ""
+            val playing    = prefs.getBoolean("track_playing_$i", false)
+            val gmeIdx     = prefs.getInt("track_gme_index_$i", -1)
+            val parentName = prefs.getString("track_parent_name_$i", "") ?: ""
+            tracks.add(TrackItem(name, info, uri, playing, gmeIdx, parentName))
         }
     }
 
@@ -834,6 +934,8 @@ class MainActivity : AppCompatActivity() {
             edit.putString("track_info_$i", track.info)
             edit.putString("track_uri_$i", track.uri)
             edit.putBoolean("track_playing_$i", track.isPlaying)
+            edit.putInt("track_gme_index_$i", track.gmeTrackIndex)
+            edit.putString("track_parent_name_$i", track.parentFileName)
         }
         edit.apply()
     }

@@ -28,7 +28,9 @@ data class AudioFile(
     val uri: String = "",
     val lastModified: Long = 0L,
     val durationMs: Long = 0L,
-    val trackNumber: Int? = null
+    val trackNumber: Int? = null,
+    val gmeTrackIndex: Int = -1,
+    val parentFileName: String = ""
 ) : Serializable
 
 data class FolderItem(val name: String, val docId: String)
@@ -58,7 +60,8 @@ class FileListActivity : AppCompatActivity() {
     private var currentSort = SortOrder.NAME_ASC
     private var loadToken = 0
 
-    private val audioExtensions = setOf("flac", "mp3", "wav", "m4a", "aac", "wma", "ogg", "opus")
+    private val gmeExtensions = setOf("nsf", "nsfe", "spc", "gbs", "vgm", "vgz", "gym", "hes", "kss", "sap", "ay")
+    private val audioExtensions = setOf("flac", "mp3", "wav", "m4a", "aac", "wma", "ogg", "opus") + gmeExtensions
     private val uiHandler = Handler(Looper.getMainLooper())
 
     private lateinit var browserAdapter: BrowserAdapter
@@ -97,7 +100,14 @@ class FileListActivity : AppCompatActivity() {
                 val files = getFolderAudioFiles(folder.docId)
                 if (files.isNotEmpty()) returnFiles(ArrayList(files), autoPlay = true)
             },
-            onFileClick = { fileIndex -> toggleSelection(fileIndex) },
+            onFileClick = { fileIndex ->
+                val file = displayFiles[fileIndex]
+                if (file.name.substringAfterLast(".").lowercase() in gmeExtensions) {
+                    openGmeFile(file)
+                } else {
+                    toggleSelection(fileIndex)
+                }
+            },
             onFileLongClick = { fileIndex -> confirmDeleteFile(fileIndex) }
         )
 
@@ -258,10 +268,11 @@ class FileListActivity : AppCompatActivity() {
     }
 
     private fun loadDurationsAsync(token: Int) {
-        val snapshot = displayFiles.map { it.uri }
+        val snapshot = displayFiles.map { it.uri to it.name }
         Thread {
-            snapshot.forEachIndexed { displayIndex, uri ->
+            snapshot.forEachIndexed { displayIndex, (uri, name) ->
                 if (token != loadToken) return@Thread
+                if (name.substringAfterLast(".").lowercase() in gmeExtensions) return@forEachIndexed
                 var ms = 0L
                 try {
                     val retriever = MediaMetadataRetriever()
@@ -280,6 +291,60 @@ class FileListActivity : AppCompatActivity() {
                 }
             }
         }.start()
+    }
+
+    private fun openGmeFile(file: AudioFile) {
+        val dialog = com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(file.name)
+            .setMessage(getString(R.string.gme_loading))
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
+
+        Thread {
+            val player = GmePlayer(this)
+            val tracks = try { player.openFile(Uri.parse(file.uri)) } catch (_: Exception) { null }
+            player.release()
+            uiHandler.post {
+                dialog.dismiss()
+                if (tracks == null) {
+                    android.widget.Toast.makeText(this, getString(R.string.gme_open_error), android.widget.Toast.LENGTH_SHORT).show()
+                    return@post
+                }
+                showGmeTrackDialog(file, tracks)
+            }
+        }.start()
+    }
+
+    private fun showGmeTrackDialog(file: AudioFile, tracks: List<GmePlayer.TrackInfo>) {
+        val checked = BooleanArray(tracks.size) { true }
+        val items = tracks.mapIndexed { i, t ->
+            val dur = if (t.durationMs > 0) " (${formatDuration(t.durationMs.toLong())})" else ""
+            "${t.name}$dur"
+        }.toTypedArray()
+
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(file.name)
+            .setMultiChoiceItems(items, checked) { _, which, isChecked -> checked[which] = isChecked }
+            .setPositiveButton(getString(R.string.gme_add)) { _, _ ->
+                val selected = ArrayList<AudioFile>()
+                tracks.forEachIndexed { i, trackInfo ->
+                    if (checked[i]) {
+                        selected.add(AudioFile(
+                            name = trackInfo.name,
+                            format = file.format,
+                            trackName = trackInfo.name,
+                            uri = file.uri,
+                            lastModified = file.lastModified,
+                            durationMs = trackInfo.durationMs.toLong(),
+                            gmeTrackIndex = i,
+                            parentFileName = file.name
+                        ))
+                    }
+                }
+                if (selected.isNotEmpty()) returnFiles(selected)
+            }
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
     }
 
     private fun formatDuration(ms: Long): String {
@@ -500,10 +565,13 @@ class BrowserAdapter(
         private val tvFileFormat: TextView = view.findViewById(R.id.tvFileFormat)
         private val tvFileDuration: TextView = view.findViewById(R.id.tvFileDuration)
         private val cbSelected: CheckBox = view.findViewById(R.id.cbSelected)
+        private val gmeExts = setOf("nsf", "nsfe", "spc", "gbs", "vgm", "vgz", "gym", "hes", "kss", "sap", "ay")
         fun bind(file: AudioFile, duration: String, selected: Boolean) {
             tvFileName.text = file.name
             tvFileFormat.text = file.format
             tvFileDuration.text = duration
+            val isGme = file.name.substringAfterLast(".").lowercase() in gmeExts
+            cbSelected.visibility = if (isGme) View.GONE else View.VISIBLE
             cbSelected.isChecked = selected
         }
     }

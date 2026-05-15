@@ -28,4 +28,9 @@
         android:title="@string/resume_settings"
         app:showAsAction="never" />
 
+    <item
+        android:id="@+id/action_gme_duration_settings"
+        android:title="@string/gme_duration_settings"
+        app:showAsAction="never" />
+
 </menu>
