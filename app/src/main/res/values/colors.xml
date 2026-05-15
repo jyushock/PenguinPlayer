@@ -3,8 +3,8 @@
     <color name="background">#F5F5F5</color>
     <color name="surface">#FFFFFF</color>
     <color name="surface_card">#FFFFFF</color>
-    <color name="primary">#7C4DFF</color>
-    <color name="primary_dark">#5E35B1</color>
+    <color name="primary">#1565C0</color>
+    <color name="primary_dark">#003c8f</color>
     <color name="text_primary">#1A1A1A</color>
     <color name="text_secondary">#757575</color>
     <color name="album_art_bg">#EDE7F6</color>

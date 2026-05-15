@@ -45,4 +45,10 @@
     <string name="gme_loading">トラックを読み込み中…</string>
     <string name="gme_open_error">ファイルを開けませんでした</string>
     <string name="gme_add">追加</string>
+    <string name="zip_loading">ZIPを読み込み中…</string>
+    <string name="zip_no_audio">音楽ファイルが見つかりません</string>
+    <string name="zip_extracting">展開中…</string>
+    <string name="zip_open_error">ZIPを開けませんでした</string>
+    <string name="zip_extract_error">展開に失敗しました</string>
+    <string name="dark_mode">ダークモード</string>
 </resources>

@@ -8,18 +8,25 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.DocumentsContract
 import android.view.LayoutInflater
+import android.view.Menu
+import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
 import android.widget.CheckBox
+import android.widget.HorizontalScrollView
 import android.widget.ImageButton
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.DividerItemDecoration
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
+import java.io.File
 import java.io.Serializable
+import java.util.zip.ZipInputStream
 
 data class AudioFile(
     val name: String,
@@ -61,13 +68,15 @@ class FileListActivity : AppCompatActivity() {
     private var loadToken = 0
 
     private val gmeExtensions = setOf("nsf", "nsfe", "spc", "gbs", "vgm", "vgz", "gym", "hes", "kss", "sap", "ay")
-    private val audioExtensions = setOf("flac", "mp3", "wav", "m4a", "aac", "wma", "ogg", "opus") + gmeExtensions
+    private val zipExtensions = setOf("zip")
+    private val audioExtensions = setOf("flac", "mp3", "wav", "m4a", "aac", "wma", "ogg", "opus") + gmeExtensions + zipExtensions
     private val uiHandler = Handler(Looper.getMainLooper())
 
     private lateinit var browserAdapter: BrowserAdapter
     private lateinit var btnAddSelected: MaterialButton
     private lateinit var tvSortOrder: TextView
-    private lateinit var tvCurrentPath: TextView
+    private lateinit var scrollBreadcrumb: HorizontalScrollView
+    private lateinit var layoutBreadcrumb: LinearLayout
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -76,15 +85,14 @@ class FileListActivity : AppCompatActivity() {
         val toolbar = findViewById<MaterialToolbar>(R.id.toolbarFileList)
         setSupportActionBar(toolbar)
         toolbar.setNavigationOnClickListener {
-            if (!navigateUp()) {
-                setResult(RESULT_CANCELED)
-                finish()
-            }
+            setResult(RESULT_CANCELED)
+            finish()
         }
 
         btnAddSelected = findViewById(R.id.btnAddSelected)
         tvSortOrder = findViewById(R.id.tvSortOrder)
-        tvCurrentPath = findViewById(R.id.tvCurrentPath)
+        scrollBreadcrumb = findViewById(R.id.scrollBreadcrumb)
+        layoutBreadcrumb = findViewById(R.id.layoutBreadcrumb)
 
         currentSort = loadSortOrder()
         tvSortOrder.text = sortLabel(currentSort)
@@ -102,10 +110,10 @@ class FileListActivity : AppCompatActivity() {
             },
             onFileClick = { fileIndex ->
                 val file = displayFiles[fileIndex]
-                if (file.name.substringAfterLast(".").lowercase() in gmeExtensions) {
-                    openGmeFile(file)
-                } else {
-                    toggleSelection(fileIndex)
+                when (file.name.substringAfterLast(".").lowercase()) {
+                    in gmeExtensions -> openGmeFile(file)
+                    in zipExtensions -> openZipFile(file)
+                    else             -> toggleSelection(fileIndex)
                 }
             },
             onFileLongClick = { fileIndex -> confirmDeleteFile(fileIndex) }
@@ -116,13 +124,25 @@ class FileListActivity : AppCompatActivity() {
         rvFiles.addItemDecoration(DividerItemDecoration(this, DividerItemDecoration.VERTICAL))
         rvFiles.adapter = browserAdapter
 
-        findViewById<MaterialButton>(R.id.btnAddAll).setOnClickListener {
+        val btnAddAll = findViewById<MaterialButton>(R.id.btnAddAll)
+        btnAddAll.setOnClickListener {
             returnFiles(ArrayList(displayFiles), autoPlay = true)
+        }
+        btnAddAll.setOnLongClickListener {
+            if (displayFiles.isEmpty()) return@setOnLongClickListener true
+            returnFiles(ArrayList(displayFiles), appendOnly = true)
+            true
         }
         btnAddSelected.setOnClickListener {
             if (selectedIndices.isEmpty()) return@setOnClickListener
             val selected = selectedIndices.sorted().map { displayFiles[it] }
-            returnFiles(ArrayList(selected))
+            returnFiles(ArrayList(selected), autoPlay = true)
+        }
+        btnAddSelected.setOnLongClickListener {
+            if (selectedIndices.isEmpty()) return@setOnLongClickListener true
+            val selected = selectedIndices.sorted().map { displayFiles[it] }
+            returnFiles(ArrayList(selected), appendOnly = true)
+            true
         }
 
         val uriString = intent.getStringExtra("folder_uri")
@@ -133,10 +153,27 @@ class FileListActivity : AppCompatActivity() {
             val rootDisplay = getDisplayPath(treeUri)
             currentFolderDocId = rootDocId
             currentFolderName = rootDisplay
+            restoreFolderState()
             loadCurrentFolder()
         } else {
-            tvCurrentPath.text = getString(R.string.no_folder_set)
+            updateBreadcrumb()
         }
+    }
+
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.menu_file_browser, menu)
+        return true
+    }
+
+    override fun onPrepareOptionsMenu(menu: Menu): Boolean {
+        menu.findItem(R.id.action_navigate_up)?.isVisible = folderStack.isNotEmpty()
+        return super.onPrepareOptionsMenu(menu)
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean = when (item.itemId) {
+        R.id.action_navigate_up   -> { navigateUp(); true }
+        R.id.action_navigate_root -> { navigateToRoot(); true }
+        else -> super.onOptionsItemSelected(item)
     }
 
     @Deprecated("Deprecated in Java")
@@ -172,11 +209,12 @@ class FileListActivity : AppCompatActivity() {
         loadToken++
         val token = loadToken
 
+        saveFolderState()
         allFiles.clear()
         subFolders.clear()
         durationMap.clear()
         selectedIndices.clear()
-        tvCurrentPath.text = buildPathDisplay()
+        updateBreadcrumb()
 
         val treeUri = rootUri ?: return
         val docId = currentFolderDocId ?: return
@@ -272,13 +310,17 @@ class FileListActivity : AppCompatActivity() {
         Thread {
             snapshot.forEachIndexed { displayIndex, (uri, name) ->
                 if (token != loadToken) return@Thread
-                if (name.substringAfterLast(".").lowercase() in gmeExtensions) return@forEachIndexed
+                val ext = name.substringAfterLast(".").lowercase()
+                if (ext in gmeExtensions || ext in zipExtensions) return@forEachIndexed
                 var ms = 0L
+                var trackNum: Int? = null
                 try {
                     val retriever = MediaMetadataRetriever()
                     retriever.setDataSource(this, Uri.parse(uri))
                     ms = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                         ?.toLongOrNull() ?: 0L
+                    trackNum = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER)
+                        ?.substringBefore('/')?.trim()?.toIntOrNull()
                     retriever.release()
                 } catch (_: Exception) { }
                 val formatted = if (ms > 0) formatDuration(ms) else ""
@@ -286,7 +328,7 @@ class FileListActivity : AppCompatActivity() {
                     if (token != loadToken) return@post
                     durationMap[uri] = formatted
                     val allIdx = allFiles.indexOfFirst { it.uri == uri }
-                    if (allIdx >= 0) allFiles[allIdx] = allFiles[allIdx].copy(durationMs = ms)
+                    if (allIdx >= 0) allFiles[allIdx] = allFiles[allIdx].copy(durationMs = ms, trackNumber = trackNum)
                     browserAdapter.notifyItemChanged(subFolders.size + displayIndex)
                 }
             }
@@ -347,16 +389,223 @@ class FileListActivity : AppCompatActivity() {
             .show()
     }
 
+    // --- ZIP support ---
+
+    private fun openZipFile(file: AudioFile) {
+        val dialog = com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(file.name)
+            .setMessage(getString(R.string.zip_loading))
+            .setCancelable(false)
+            .show()
+
+        Thread {
+            val uri = Uri.parse(file.uri)
+            val entries = mutableListOf<String>()
+            try {
+                contentResolver.openInputStream(uri)?.use { input ->
+                    ZipInputStream(input).use { zip ->
+                        var entry = zip.nextEntry
+                        while (entry != null) {
+                            if (!entry.isDirectory) {
+                                val ext = entry.name.substringAfterLast(".", "").lowercase()
+                                if (ext in audioExtensions && ext !in zipExtensions) {
+                                    entries.add(entry.name)
+                                }
+                            }
+                            zip.closeEntry()
+                            entry = zip.nextEntry
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                uiHandler.post {
+                    dialog.dismiss()
+                    android.widget.Toast.makeText(this, getString(R.string.zip_open_error), android.widget.Toast.LENGTH_SHORT).show()
+                }
+                return@Thread
+            }
+            uiHandler.post {
+                dialog.dismiss()
+                if (entries.isEmpty()) {
+                    android.widget.Toast.makeText(this, getString(R.string.zip_no_audio), android.widget.Toast.LENGTH_SHORT).show()
+                    return@post
+                }
+                showZipTrackDialog(file, entries)
+            }
+        }.start()
+    }
+
+    private fun showZipTrackDialog(zipFile: AudioFile, entries: List<String>) {
+        val checked = BooleanArray(entries.size) { true }
+        val displayNames = entries.map { it.substringAfterLast('/') }.toTypedArray()
+
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(zipFile.name)
+            .setMultiChoiceItems(displayNames, checked) { _, which, isChecked -> checked[which] = isChecked }
+            .setPositiveButton(getString(R.string.gme_add)) { _, _ ->
+                val selected = entries.filterIndexed { i, _ -> checked[i] }
+                if (selected.isNotEmpty()) extractAndReturnZipEntries(zipFile, selected)
+            }
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
+    }
+
+    private fun extractAndReturnZipEntries(zipFile: AudioFile, entries: List<String>) {
+        val total = entries.size
+        val progressDialog = com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.zip_extracting))
+            .setMessage("0 / $total")
+            .setCancelable(false)
+            .show()
+
+        Thread {
+            val cacheRoot = File(cacheDir, "penguin_zip_cache").also { it.mkdirs() }
+            val results = mutableListOf<AudioFile>()
+            val needed = entries.toHashSet()
+            val safeZipBase = zipFile.name.substringBeforeLast('.')
+            var processed = 0
+
+            try {
+                contentResolver.openInputStream(Uri.parse(zipFile.uri))?.use { input ->
+                    ZipInputStream(input).use { zip ->
+                        var entry = zip.nextEntry
+                        while (entry != null && processed < total) {
+                            if (!entry.isDirectory && entry.name in needed) {
+                                val fileName   = entry.name.substringAfterLast('/')
+                                val safeEntry  = entry.name.replace('/', '_')
+                                val destFile   = File(cacheRoot, "${safeZipBase}_${safeEntry}")
+                                if (!destFile.exists()) {
+                                    destFile.outputStream().use { out -> zip.copyTo(out) }
+                                }
+                                val ext = fileName.substringAfterLast('.', "").uppercase()
+                                results.add(AudioFile(
+                                    name           = fileName,
+                                    format         = if (ext.lowercase() == "m4a") "ALAC" else ext,
+                                    trackName      = fileName.substringBeforeLast('.'),
+                                    uri            = android.net.Uri.fromFile(destFile).toString(),
+                                    parentFileName = zipFile.name
+                                ))
+                                processed++
+                                val p = processed
+                                uiHandler.post { progressDialog.setMessage("$p / $total") }
+                            }
+                            zip.closeEntry()
+                            entry = zip.nextEntry
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                uiHandler.post {
+                    progressDialog.dismiss()
+                    android.widget.Toast.makeText(this, getString(R.string.zip_extract_error), android.widget.Toast.LENGTH_SHORT).show()
+                }
+                return@Thread
+            }
+
+            uiHandler.post {
+                progressDialog.dismiss()
+                if (results.isEmpty()) {
+                    android.widget.Toast.makeText(this, getString(R.string.zip_extract_error), android.widget.Toast.LENGTH_SHORT).show()
+                    return@post
+                }
+                returnFiles(ArrayList(results))
+            }
+        }.start()
+    }
+
     private fun formatDuration(ms: Long): String {
         val s = ms / 1000
         return "${s / 60}:${(s % 60).toString().padStart(2, '0')}"
     }
 
-    private fun buildPathDisplay(): String {
-        val rootDisplay = rootUri?.let { getDisplayPath(it) } ?: ""
-        if (folderStack.isEmpty()) return rootDisplay
-        val subParts = folderStack.drop(1).map { it.name } + listOfNotNull(currentFolderName)
-        return if (subParts.isEmpty()) rootDisplay else "$rootDisplay/${subParts.joinToString("/")}"
+    private fun updateBreadcrumb() {
+        layoutBreadcrumb.removeAllViews()
+        val primaryColor = ContextCompat.getColor(this, R.color.primary)
+        val secondaryColor = ContextCompat.getColor(this, R.color.text_secondary)
+        val dp4 = (4 * resources.displayMetrics.density).toInt()
+
+        fun addText(label: String, color: Int, onClick: (() -> Unit)? = null) {
+            val tv = TextView(this)
+            tv.text = label
+            tv.textSize = 12f
+            tv.setTextColor(color)
+            tv.setPadding(dp4, dp4, dp4, dp4)
+            if (onClick != null) {
+                val attrs = intArrayOf(android.R.attr.selectableItemBackground)
+                val ta = obtainStyledAttributes(attrs)
+                tv.background = ta.getDrawable(0)
+                ta.recycle()
+                tv.setOnClickListener { onClick() }
+            }
+            layoutBreadcrumb.addView(tv)
+        }
+
+        if (rootUri == null) {
+            addText(getString(R.string.no_folder_set), secondaryColor)
+            return
+        }
+
+        if (folderStack.isEmpty()) {
+            addText(currentFolderName ?: "", secondaryColor)
+        } else {
+            folderStack.forEachIndexed { i, item ->
+                if (i > 0) addText(" / ", secondaryColor)
+                addText(item.name, primaryColor) { navigateToBreadcrumb(i) }
+            }
+            addText(" / ", secondaryColor)
+            addText(currentFolderName ?: "", secondaryColor)
+        }
+
+        scrollBreadcrumb.post { scrollBreadcrumb.fullScroll(View.FOCUS_RIGHT) }
+        invalidateOptionsMenu()
+    }
+
+    private fun navigateToBreadcrumb(stackIndex: Int) {
+        val target = folderStack[stackIndex]
+        while (folderStack.size > stackIndex) folderStack.removeLast()
+        currentFolderDocId = target.docId
+        currentFolderName = target.name
+        loadCurrentFolder()
+    }
+
+    private fun navigateToRoot() {
+        if (folderStack.isEmpty()) return
+        val root = folderStack.first()
+        folderStack.clear()
+        currentFolderDocId = root.docId
+        currentFolderName = root.name
+        loadCurrentFolder()
+    }
+
+    private fun saveFolderState() {
+        val folderUri = rootUri?.toString() ?: return
+        val prefs = getSharedPreferences("penguin_player", MODE_PRIVATE)
+        val edit = prefs.edit()
+        edit.putString("browser_root_uri", folderUri)
+        edit.putString("browser_current_doc_id", currentFolderDocId)
+        edit.putString("browser_current_name", currentFolderName)
+        edit.putInt("browser_stack_size", folderStack.size)
+        folderStack.forEachIndexed { i, item ->
+            edit.putString("browser_stack_doc_$i", item.docId)
+            edit.putString("browser_stack_name_$i", item.name)
+        }
+        edit.apply()
+    }
+
+    private fun restoreFolderState() {
+        val folderUri = rootUri?.toString() ?: return
+        val prefs = getSharedPreferences("penguin_player", MODE_PRIVATE)
+        if (prefs.getString("browser_root_uri", null) != folderUri) return
+        val savedDocId = prefs.getString("browser_current_doc_id", null) ?: return
+        val savedName = prefs.getString("browser_current_name", null) ?: return
+        val stackSize = prefs.getInt("browser_stack_size", 0)
+        for (i in 0 until stackSize) {
+            val docId = prefs.getString("browser_stack_doc_$i", null) ?: break
+            val name = prefs.getString("browser_stack_name_$i", null) ?: break
+            folderStack.addLast(FolderItem(name, docId))
+        }
+        currentFolderDocId = savedDocId
+        currentFolderName = savedName
     }
 
     private fun getDisplayPath(uri: Uri): String {
@@ -500,10 +749,11 @@ class FileListActivity : AppCompatActivity() {
         }
     }
 
-    private fun returnFiles(files: ArrayList<AudioFile>, autoPlay: Boolean = false) {
+    private fun returnFiles(files: ArrayList<AudioFile>, autoPlay: Boolean = false, appendOnly: Boolean = false) {
         val intent = Intent()
         intent.putExtra("files", files)
         intent.putExtra("auto_play", autoPlay)
+        intent.putExtra("append_only", appendOnly)
         setResult(RESULT_OK, intent)
         finish()
     }
@@ -570,8 +820,9 @@ class BrowserAdapter(
             tvFileName.text = file.name
             tvFileFormat.text = file.format
             tvFileDuration.text = duration
-            val isGme = file.name.substringAfterLast(".").lowercase() in gmeExts
-            cbSelected.visibility = if (isGme) View.GONE else View.VISIBLE
+            val ext = file.name.substringAfterLast(".").lowercase()
+            val noCheckbox = ext in gmeExts || ext == "zip"
+            cbSelected.visibility = if (noCheckbox) View.GONE else View.VISIBLE
             cbSelected.isChecked = selected
         }
     }

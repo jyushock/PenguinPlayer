@@ -40,6 +40,7 @@ import android.widget.SeekBar
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -142,6 +143,7 @@ class MainActivity : AppCompatActivity() {
             @Suppress("UNCHECKED_CAST")
             val files = result.data?.getSerializableExtra("files") as? ArrayList<AudioFile>
             val autoPlay = result.data?.getBooleanExtra("auto_play", false) ?: false
+            val appendOnly = result.data?.getBooleanExtra("append_only", false) ?: false
             if (files != null) {
                 if (autoPlay) {
                     stopPlayback()
@@ -163,7 +165,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 adapter.notifyDataSetChanged()
                 savePlaylist()
-                if (tracks.isNotEmpty()) play(startIndex)
+                if (!appendOnly && tracks.isNotEmpty()) play(startIndex)
             }
         }
     }
@@ -316,6 +318,16 @@ class MainActivity : AppCompatActivity() {
         R.id.action_sleep_timer           -> { showSleepTimerDialog(); true }
         R.id.action_resume_settings       -> { showResumeSettings(); true }
         R.id.action_gme_duration_settings -> { showGmeDurationSettings(); true }
+        R.id.action_dark_mode -> {
+            val prefs = getSharedPreferences("penguin_player", Context.MODE_PRIVATE)
+            val isDark = !prefs.getBoolean("dark_mode", false)
+            prefs.edit().putBoolean("dark_mode", isDark).apply()
+            AppCompatDelegate.setDefaultNightMode(
+                if (isDark) AppCompatDelegate.MODE_NIGHT_YES
+                else AppCompatDelegate.MODE_NIGHT_NO
+            )
+            true
+        }
         else -> super.onOptionsItemSelected(item)
     }
 

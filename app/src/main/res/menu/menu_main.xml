@@ -33,4 +33,9 @@
         android:title="@string/gme_duration_settings"
         app:showAsAction="never" />
 
+    <item
+        android:id="@+id/action_dark_mode"
+        android:title="@string/dark_mode"
+        app:showAsAction="never" />
+
 </menu>

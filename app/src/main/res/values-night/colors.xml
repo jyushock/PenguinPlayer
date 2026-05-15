@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="background">#121212</color>
+    <color name="surface">#1E1E1E</color>
+    <color name="surface_card">#2A2A2A</color>
+    <color name="primary">#90CAF9</color>
+    <color name="primary_dark">#42A5F5</color>
+    <color name="text_primary">#FFFFFFFF</color>
+    <color name="text_secondary">#B0B0B0</color>
+    <color name="album_art_bg">#1A2744</color>
+    <color name="playing_indicator">#90CAF9</color>
+    <color name="delete_button">#EF5350</color>
+    <color name="white">#FFFFFF</color>
+    <color name="divider">#2E2E2E</color>
+</resources>

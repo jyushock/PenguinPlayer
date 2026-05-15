@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <item
+        android:id="@+id/action_navigate_up"
+        android:icon="@drawable/ic_arrow_upward"
+        android:title="一つ上の階層へ"
+        app:showAsAction="always" />
+
+    <item
+        android:id="@+id/action_navigate_root"
+        android:icon="@drawable/ic_home"
+        android:title="ルートへ"
+        app:showAsAction="always" />
+
+</menu>

@@ -28,17 +28,22 @@
         android:orientation="vertical"
         app:layout_behavior="@string/appbar_scrolling_view_behavior">
 
-        <!-- Current path -->
-        <TextView
-            android:id="@+id/tvCurrentPath"
+        <!-- Breadcrumb path -->
+        <HorizontalScrollView
+            android:id="@+id/scrollBreadcrumb"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="/sdcard/Music"
-            android:textColor="@color/text_secondary"
-            android:textSize="12sp"
-            android:paddingHorizontal="16dp"
-            android:paddingVertical="10dp"
-            android:background="@color/surface" />
+            android:scrollbars="none"
+            android:background="@color/surface">
+            <LinearLayout
+                android:id="@+id/layoutBreadcrumb"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingHorizontal="16dp"
+                android:paddingVertical="10dp" />
+        </HorizontalScrollView>
 
         <View
             android:layout_width="match_parent"
