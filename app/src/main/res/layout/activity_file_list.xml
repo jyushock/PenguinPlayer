@@ -111,25 +111,25 @@
             android:background="@color/surface">
 
             <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnAddAll"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginEnd="8dp"
-                android:text="@string/add_all"
-                android:textColor="@color/primary"
-                app:strokeColor="@color/primary" />
-
-            <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnAddSelected"
                 style="@style/Widget.MaterialComponents.Button"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
+                android:layout_marginEnd="8dp"
                 android:text="@string/add_selected_zero"
                 app:backgroundTint="@color/primary"
                 android:alpha="0.4" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnAddAll"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/add_all"
+                android:textColor="@color/primary"
+                app:strokeColor="@color/primary" />
 
         </LinearLayout>
 

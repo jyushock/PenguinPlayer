@@ -58,7 +58,8 @@
             android:src="@drawable/ic_drag_handle"
             android:tint="@color/text_secondary"
             android:layout_marginStart="12dp"
-            android:contentDescription="ドラッグして並び替え" />
+            android:contentDescription="ドラッグして並び替え"
+            android:visibility="gone" />
 
     </LinearLayout>
 </com.google.android.material.card.MaterialCardView>

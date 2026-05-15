@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">PenguinPlayer</string>
-    <string name="select_storage">ストレージを選択</string>
+    <string name="select_storage">ファイルを選択</string>
     <string name="playlist">PLAYLIST</string>
     <string name="file_browser_title">ファイルを選択</string>
     <string name="remove_from_playlist">プレイリストから除外</string>
@@ -28,4 +28,15 @@
     <string name="initial_folder_title">最初に開くフォルダ</string>
     <string name="initial_folder_message">「ストレージを選択」ボタンで最初に開くフォルダのパスを設定します。</string>
     <string name="confirm_ok">OK</string>
+    <string name="folder_settings">フォルダ設定</string>
+    <string name="no_folder_set">フォルダが設定されていません</string>
+    <string name="playlist_sort">プレイリストのソート</string>
+    <string name="playlist_clear">プレイリストをクリア</string>
+    <string name="playlist_clear_confirm">プレイリストをすべて削除しますか？</string>
+    <string name="sleep_timer">スリープタイマー</string>
+    <string name="sleep_timer_off">OFFにする</string>
+    <string name="resume_settings">再生位置記憶の設定</string>
+    <string name="resume_settings_title">長い曲の再生位置を記憶</string>
+    <string name="resume_settings_msg">この分数以上の曲は再生位置を記憶し、次回から続きから再生します。</string>
+    <string name="resume_settings_unit">分以上</string>
 </resources>

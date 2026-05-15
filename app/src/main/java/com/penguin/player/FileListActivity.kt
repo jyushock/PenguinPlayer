@@ -1,35 +1,37 @@
 package com.penguin.player
 
 import android.content.Intent
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Paint
+import android.media.MediaMetadataRetriever
+import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.provider.DocumentsContract
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.CheckBox
+import android.widget.ImageButton
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.DividerItemDecoration
-import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import java.io.Serializable
 
 data class AudioFile(
     val name: String,
     val format: String,
-    val size: String,
     val trackName: String = name.substringBeforeLast(".").replace("_", " "),
+    val uri: String = "",
     val lastModified: Long = 0L,
-    val createdAt: Long? = null,
+    val durationMs: Long = 0L,
     val trackNumber: Int? = null
 ) : Serializable
+
+data class FolderItem(val name: String, val docId: String)
 
 enum class SortOrder {
     NAME_ASC, NAME_DESC,
@@ -43,84 +45,267 @@ enum class SortOrder {
 
 class FileListActivity : AppCompatActivity() {
 
-    private val allFiles = mutableListOf(
-        AudioFile("beethoven_symphony_no9.flac",    "FLAC", "42.3 MB",  "Beethoven - Symphony No.9",         1736899200000L, 1717200000000L, 1),
-        AudioFile("mozart_piano_concerto_no21.flac","FLAC", "56.1 MB",  "Mozart - Piano Concerto No.21",      1740009600000L, 1719792000000L, 2),
-        AudioFile("bach_cello_suite_no1.wav",       "WAV",  "78.4 MB",  "Bach - Cello Suite No.1",            1732924800000L, 1701388800000L, 3),
-        AudioFile("chopin_nocturne_op9.mp3",        "MP3",  "5.2 MB",   "Chopin - Nocturne Op.9 No.2",        1741132800000L, 1722470400000L, 4),
-        AudioFile("debussy_clair_de_lune.flac",     "FLAC", "18.7 MB",  "Debussy - Clair de Lune",            1724112000000L, 1696118400000L, 5),
-        AudioFile("bach_goldberg_variations.alac",  "ALAC", "234.5 MB", "Bach - Goldberg Variations",         1743465600000L, 1704067200000L, 6),
-        AudioFile("beethoven_moonlight_sonata.mp3", "MP3",  "12.1 MB",  "Beethoven - Moonlight Sonata",       1733788800000L, 1706745600000L, 7),
-        AudioFile("wagner_ring_cycle_part1.wma",    "WMA",  "312.0 MB", "Wagner - Ring Cycle Part 1",         1728950400000L, 1693526400000L, 8),
-        AudioFile("schubert_winterreise.flac",      "FLAC", "89.3 MB",  "Schubert - Winterreise",             1746057600000L, 1714521600000L, 9),
-        AudioFile("brahms_symphony_no4.flac",       "FLAC", "67.8 MB",  "Brahms - Symphony No.4",             1727222400000L, 1698796800000L, 10),
-    )
+    private var rootUri: Uri? = null
+    private var currentFolderDocId: String? = null
+    private var currentFolderName: String? = null
+    private val folderStack = ArrayDeque<FolderItem>()
 
+    private val allFiles = mutableListOf<AudioFile>()
+    private val subFolders = mutableListOf<FolderItem>()
     private val displayFiles = mutableListOf<AudioFile>()
     private val selectedIndices = mutableSetOf<Int>()
+    private val durationMap = mutableMapOf<String, String>()
     private var currentSort = SortOrder.NAME_ASC
+    private var loadToken = 0
 
-    private lateinit var fileAdapter: FileAdapter
+    private val audioExtensions = setOf("flac", "mp3", "wav", "m4a", "aac", "wma", "ogg", "opus")
+    private val uiHandler = Handler(Looper.getMainLooper())
+
+    private lateinit var browserAdapter: BrowserAdapter
     private lateinit var btnAddSelected: MaterialButton
     private lateinit var tvSortOrder: TextView
+    private lateinit var tvCurrentPath: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_file_list)
 
-        val prefs = getSharedPreferences("penguin_player", MODE_PRIVATE)
-        val initialFolder = prefs.getString("initial_folder", "/sdcard/Music") ?: "/sdcard/Music"
-        findViewById<TextView>(R.id.tvCurrentPath).text = initialFolder
-
         val toolbar = findViewById<MaterialToolbar>(R.id.toolbarFileList)
         setSupportActionBar(toolbar)
         toolbar.setNavigationOnClickListener {
-            setResult(RESULT_CANCELED)
-            finish()
+            if (!navigateUp()) {
+                setResult(RESULT_CANCELED)
+                finish()
+            }
         }
 
         btnAddSelected = findViewById(R.id.btnAddSelected)
         tvSortOrder = findViewById(R.id.tvSortOrder)
+        tvCurrentPath = findViewById(R.id.tvCurrentPath)
 
         currentSort = loadSortOrder()
-        applySort()
         tvSortOrder.text = sortLabel(currentSort)
+        tvSortOrder.setOnClickListener { showSortDialog() }
 
-        fileAdapter = FileAdapter(displayFiles, selectedIndices) { position ->
-            toggleSelection(position)
-        }
+        browserAdapter = BrowserAdapter(
+            folders = subFolders,
+            files = displayFiles,
+            selectedIndices = selectedIndices,
+            durationMap = durationMap,
+            onFolderClick = { folder -> navigateTo(folder) },
+            onFolderAddClick = { folder ->
+                val files = getFolderAudioFiles(folder.docId)
+                if (files.isNotEmpty()) returnFiles(ArrayList(files), autoPlay = true)
+            },
+            onFileClick = { fileIndex -> toggleSelection(fileIndex) },
+            onFileLongClick = { fileIndex -> confirmDeleteFile(fileIndex) }
+        )
 
         val rvFiles = findViewById<RecyclerView>(R.id.rvFiles)
         rvFiles.layoutManager = LinearLayoutManager(this)
         rvFiles.addItemDecoration(DividerItemDecoration(this, DividerItemDecoration.VERTICAL))
-        rvFiles.adapter = fileAdapter
-
-        setupFileTouchHelper(rvFiles)
-
-        tvSortOrder.setOnClickListener { showSortDialog() }
+        rvFiles.adapter = browserAdapter
 
         findViewById<MaterialButton>(R.id.btnAddAll).setOnClickListener {
-            returnFiles(ArrayList(displayFiles))
+            returnFiles(ArrayList(displayFiles), autoPlay = true)
         }
-
         btnAddSelected.setOnClickListener {
             if (selectedIndices.isEmpty()) return@setOnClickListener
             val selected = selectedIndices.sorted().map { displayFiles[it] }
             returnFiles(ArrayList(selected))
         }
+
+        val uriString = intent.getStringExtra("folder_uri")
+        if (uriString != null) {
+            rootUri = Uri.parse(uriString)
+            val treeUri = rootUri!!
+            val rootDocId = DocumentsContract.getTreeDocumentId(treeUri)
+            val rootDisplay = getDisplayPath(treeUri)
+            currentFolderDocId = rootDocId
+            currentFolderName = rootDisplay
+            loadCurrentFolder()
+        } else {
+            tvCurrentPath.text = getString(R.string.no_folder_set)
+        }
     }
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        setResult(RESULT_CANCELED)
-        @Suppress("DEPRECATION")
-        super.onBackPressed()
+        if (!navigateUp()) {
+            setResult(RESULT_CANCELED)
+            @Suppress("DEPRECATION")
+            super.onBackPressed()
+        }
     }
 
-    private fun toggleSelection(position: Int) {
-        if (selectedIndices.contains(position)) selectedIndices.remove(position)
-        else selectedIndices.add(position)
-        fileAdapter.notifyItemChanged(position)
+    // --- Folder navigation ---
+
+    private fun navigateTo(folder: FolderItem) {
+        if (currentFolderDocId != null) {
+            folderStack.addLast(FolderItem(currentFolderName ?: "", currentFolderDocId!!))
+        }
+        currentFolderDocId = folder.docId
+        currentFolderName = folder.name
+        loadCurrentFolder()
+    }
+
+    private fun navigateUp(): Boolean {
+        if (folderStack.isEmpty()) return false
+        val prev = folderStack.removeLast()
+        currentFolderDocId = prev.docId
+        currentFolderName = prev.name
+        loadCurrentFolder()
+        return true
+    }
+
+    private fun loadCurrentFolder() {
+        loadToken++
+        val token = loadToken
+
+        allFiles.clear()
+        subFolders.clear()
+        durationMap.clear()
+        selectedIndices.clear()
+        tvCurrentPath.text = buildPathDisplay()
+
+        val treeUri = rootUri ?: return
+        val docId = currentFolderDocId ?: return
+
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId)
+        val projection = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED
+        )
+
+        try {
+            contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+                val idIdx   = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameIdx = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val mimeIdx = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                val modIdx  = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+
+                while (cursor.moveToNext()) {
+                    val childDocId = cursor.getString(idIdx) ?: continue
+                    val name       = cursor.getString(nameIdx) ?: continue
+                    val mime       = cursor.getString(mimeIdx) ?: continue
+                    val lastMod    = cursor.getLong(modIdx)
+
+                    if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                        subFolders.add(FolderItem(name, childDocId))
+                    } else {
+                        val ext = name.substringAfterLast(".").lowercase()
+                        if (ext !in audioExtensions) continue
+                        val format = if (ext == "m4a") "ALAC" else ext.uppercase()
+                        val fileUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, childDocId).toString()
+                        allFiles.add(AudioFile(
+                            name = name,
+                            format = format,
+                            uri = fileUri,
+                            lastModified = lastMod
+                        ))
+                    }
+                }
+            }
+        } catch (_: Exception) { }
+
+        subFolders.sortWith { x, y -> naturalCompare(x.name, y.name) }
+        applySort()
+        browserAdapter.notifyDataSetChanged()
+        updateAddSelectedButton()
+        loadDurationsAsync(token)
+    }
+
+    private fun getFolderAudioFiles(docId: String): List<AudioFile> {
+        val treeUri = rootUri ?: return emptyList()
+        val result = mutableListOf<AudioFile>()
+        scanRecursive(treeUri, docId, result)
+        return result.sortedBy { it.name }
+    }
+
+    private fun scanRecursive(treeUri: Uri, docId: String, result: MutableList<AudioFile>) {
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId)
+        val projection = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED
+        )
+        try {
+            contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+                val idIdx   = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameIdx = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val mimeIdx = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                val modIdx  = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+                while (cursor.moveToNext()) {
+                    val childDocId = cursor.getString(idIdx) ?: continue
+                    val name       = cursor.getString(nameIdx) ?: continue
+                    val mime       = cursor.getString(mimeIdx) ?: continue
+                    val lastMod    = cursor.getLong(modIdx)
+                    if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                        scanRecursive(treeUri, childDocId, result)
+                    } else {
+                        val ext = name.substringAfterLast(".").lowercase()
+                        if (ext !in audioExtensions) continue
+                        val format = if (ext == "m4a") "ALAC" else ext.uppercase()
+                        val fileUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, childDocId).toString()
+                        result.add(AudioFile(name = name, format = format, uri = fileUri, lastModified = lastMod))
+                    }
+                }
+            }
+        } catch (_: Exception) { }
+    }
+
+    private fun loadDurationsAsync(token: Int) {
+        val snapshot = displayFiles.map { it.uri }
+        Thread {
+            snapshot.forEachIndexed { displayIndex, uri ->
+                if (token != loadToken) return@Thread
+                var ms = 0L
+                try {
+                    val retriever = MediaMetadataRetriever()
+                    retriever.setDataSource(this, Uri.parse(uri))
+                    ms = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                        ?.toLongOrNull() ?: 0L
+                    retriever.release()
+                } catch (_: Exception) { }
+                val formatted = if (ms > 0) formatDuration(ms) else ""
+                uiHandler.post {
+                    if (token != loadToken) return@post
+                    durationMap[uri] = formatted
+                    val allIdx = allFiles.indexOfFirst { it.uri == uri }
+                    if (allIdx >= 0) allFiles[allIdx] = allFiles[allIdx].copy(durationMs = ms)
+                    browserAdapter.notifyItemChanged(subFolders.size + displayIndex)
+                }
+            }
+        }.start()
+    }
+
+    private fun formatDuration(ms: Long): String {
+        val s = ms / 1000
+        return "${s / 60}:${(s % 60).toString().padStart(2, '0')}"
+    }
+
+    private fun buildPathDisplay(): String {
+        val rootDisplay = rootUri?.let { getDisplayPath(it) } ?: ""
+        if (folderStack.isEmpty()) return rootDisplay
+        val subParts = folderStack.drop(1).map { it.name } + listOfNotNull(currentFolderName)
+        return if (subParts.isEmpty()) rootDisplay else "$rootDisplay/${subParts.joinToString("/")}"
+    }
+
+    private fun getDisplayPath(uri: Uri): String {
+        val lastSegment = uri.lastPathSegment ?: return uri.toString()
+        return if (lastSegment.contains(":")) "/${lastSegment.substringAfter(":")}"
+        else lastSegment
+    }
+
+    // --- Selection ---
+
+    private fun toggleSelection(fileIndex: Int) {
+        if (selectedIndices.contains(fileIndex)) selectedIndices.remove(fileIndex)
+        else selectedIndices.add(fileIndex)
+        browserAdapter.notifyItemChanged(subFolders.size + fileIndex)
         updateAddSelectedButton()
     }
 
@@ -130,29 +315,49 @@ class FileListActivity : AppCompatActivity() {
         btnAddSelected.text = if (count > 0) "追加（${count}曲）" else getString(R.string.add_selected_zero)
     }
 
+    // --- Sort ---
+
+    private fun naturalCompare(a: String, b: String): Int {
+        var i = 0; var j = 0
+        while (i < a.length && j < b.length) {
+            val ca = a[i]; val cb = b[j]
+            if (ca.isDigit() && cb.isDigit()) {
+                var ia = i; var jb = j
+                while (ia < a.length && a[ia].isDigit()) ia++
+                while (jb < b.length && b[jb].isDigit()) jb++
+                val na = a.substring(i, ia).trimStart('0').ifEmpty { "0" }
+                val nb = b.substring(j, jb).trimStart('0').ifEmpty { "0" }
+                val cmp = if (na.length != nb.length) na.length.compareTo(nb.length) else na.compareTo(nb)
+                if (cmp != 0) return cmp
+                i = ia; j = jb
+            } else {
+                val cmp = ca.lowercaseChar().compareTo(cb.lowercaseChar())
+                if (cmp != 0) return cmp
+                i++; j++
+            }
+        }
+        return (a.length - i).compareTo(b.length - j)
+    }
+
     private fun applySort() {
         val sorted = when (currentSort) {
-            SortOrder.NAME_ASC         -> allFiles.sortedBy { it.name }
-            SortOrder.NAME_DESC        -> allFiles.sortedByDescending { it.name }
-            SortOrder.TRACK_NAME_ASC   -> allFiles.sortedBy { it.trackName }
-            SortOrder.TRACK_NAME_DESC  -> allFiles.sortedByDescending { it.trackName }
+            SortOrder.NAME_ASC         -> allFiles.sortedWith { x, y -> naturalCompare(x.name, y.name) }
+            SortOrder.NAME_DESC        -> allFiles.sortedWith { x, y -> naturalCompare(y.name, x.name) }
+            SortOrder.TRACK_NAME_ASC   -> allFiles.sortedWith { x, y -> naturalCompare(x.trackName, y.trackName) }
+            SortOrder.TRACK_NAME_DESC  -> allFiles.sortedWith { x, y -> naturalCompare(y.trackName, x.trackName) }
             SortOrder.TRACK_NUM_ASC    -> allFiles.sortedBy { it.trackNumber ?: Int.MAX_VALUE }
             SortOrder.TRACK_NUM_DESC   -> allFiles.sortedByDescending { it.trackNumber ?: 0 }
-            SortOrder.SIZE_ASC         -> allFiles.sortedBy { parseSizeMB(it.size) }
-            SortOrder.SIZE_DESC        -> allFiles.sortedByDescending { parseSizeMB(it.size) }
+            SortOrder.SIZE_ASC         -> allFiles.sortedBy { it.durationMs }
+            SortOrder.SIZE_DESC        -> allFiles.sortedByDescending { it.durationMs }
             SortOrder.FORMAT           -> allFiles.sortedBy { it.format }
             SortOrder.MODIFIED_DESC    -> allFiles.sortedByDescending { it.lastModified }
             SortOrder.MODIFIED_ASC     -> allFiles.sortedBy { it.lastModified }
-            SortOrder.CREATED_DESC     -> allFiles.sortedByDescending { it.createdAt ?: 0L }
-            SortOrder.CREATED_ASC      -> allFiles.sortedBy { it.createdAt ?: 0L }
+            SortOrder.CREATED_DESC     -> allFiles.sortedByDescending { it.lastModified }
+            SortOrder.CREATED_ASC      -> allFiles.sortedBy { it.lastModified }
         }
         displayFiles.clear()
         displayFiles.addAll(sorted)
-        selectedIndices.clear()
     }
-
-    private fun parseSizeMB(size: String): Float =
-        size.replace(" MB", "").toFloatOrNull() ?: 0f
 
     private fun sortLabel(order: SortOrder): String = when (order) {
         SortOrder.NAME_ASC        -> getString(R.string.sort_name_asc)
@@ -172,13 +377,13 @@ class FileListActivity : AppCompatActivity() {
 
     private fun showSortDialog() {
         val options = SortOrder.values().map { sortLabel(it) }.toTypedArray()
-        MaterialAlertDialogBuilder(this)
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
             .setTitle(getString(R.string.sort_title))
             .setSingleChoiceItems(options, currentSort.ordinal) { dialog, which ->
                 currentSort = SortOrder.values()[which]
                 saveSortOrder()
                 applySort()
-                fileAdapter.notifyDataSetChanged()
+                browserAdapter.notifyDataSetChanged()
                 tvSortOrder.text = options[which]
                 updateAddSelectedButton()
                 dialog.dismiss()
@@ -189,8 +394,7 @@ class FileListActivity : AppCompatActivity() {
 
     private fun loadSortOrder(): SortOrder {
         val prefs = getSharedPreferences("penguin_player", MODE_PRIVATE)
-        val ordinal = prefs.getInt("sort_order", SortOrder.NAME_ASC.ordinal)
-        return SortOrder.values().getOrElse(ordinal) { SortOrder.NAME_ASC }
+        return SortOrder.values().getOrElse(prefs.getInt("sort_order", 0)) { SortOrder.NAME_ASC }
     }
 
     private fun saveSortOrder() {
@@ -198,84 +402,109 @@ class FileListActivity : AppCompatActivity() {
             .edit().putInt("sort_order", currentSort.ordinal).apply()
     }
 
-    private fun returnFiles(files: ArrayList<AudioFile>) {
-        setResult(RESULT_OK, Intent().putExtra("files", files))
-        finish()
+    // --- File deletion ---
+
+    private fun confirmDeleteFile(fileIndex: Int) {
+        val file = displayFiles.getOrNull(fileIndex) ?: return
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.delete_file))
+            .setMessage(getString(R.string.delete_confirm_msg))
+            .setPositiveButton(getString(R.string.delete)) { _, _ -> deleteFile(file) }
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
     }
 
-    private fun setupFileTouchHelper(recyclerView: RecyclerView) {
-        val paint = Paint()
-        val callback = object : ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.LEFT) {
-            override fun onMove(rv: RecyclerView, vh: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder) = false
-
-            override fun onSwiped(vh: RecyclerView.ViewHolder, direction: Int) {
-                val pos = vh.adapterPosition
-                if (pos == RecyclerView.NO_POSITION) return
-                val file = displayFiles[pos]
-                MaterialAlertDialogBuilder(this@FileListActivity)
-                    .setTitle(getString(R.string.delete_file))
-                    .setMessage("「${file.name}」\n\n${getString(R.string.delete_confirm_msg)}")
-                    .setPositiveButton(R.string.delete) { _, _ ->
-                        allFiles.remove(file)
-                        displayFiles.removeAt(pos)
-                        selectedIndices.clear()
-                        fileAdapter.notifyItemRemoved(pos)
-                        updateAddSelectedButton()
-                    }
-                    .setNegativeButton(R.string.cancel) { _, _ ->
-                        fileAdapter.notifyItemChanged(pos)
-                    }
-                    .show()
+    private fun deleteFile(file: AudioFile) {
+        try {
+            val deleted = DocumentsContract.deleteDocument(contentResolver, Uri.parse(file.uri))
+            if (deleted) {
+                getSharedPreferences("penguin_resume", MODE_PRIVATE)
+                    .edit().remove("pos_${file.uri.hashCode()}").apply()
+                allFiles.remove(file)
+                displayFiles.remove(file)
+                durationMap.remove(file.uri)
+                selectedIndices.clear()
+                browserAdapter.notifyDataSetChanged()
+                updateAddSelectedButton()
             }
-
-            override fun onChildDraw(
-                c: Canvas, rv: RecyclerView, vh: RecyclerView.ViewHolder,
-                dX: Float, dY: Float, actionState: Int, isCurrentlyActive: Boolean
-            ) {
-                if (actionState == ItemTouchHelper.ACTION_STATE_SWIPE && dX < 0) {
-                    val v = vh.itemView
-                    paint.color = Color.parseColor("#E53935")
-                    c.drawRect(v.right + dX, v.top.toFloat(), v.right.toFloat(), v.bottom.toFloat(), paint)
-                    ContextCompat.getDrawable(rv.context, android.R.drawable.ic_menu_delete)?.let { icon ->
-                        icon.setTint(Color.WHITE)
-                        val sz = 44; val top = v.top + (v.height - sz) / 2; val left = v.right - sz - 20
-                        icon.setBounds(left, top, left + sz, top + sz)
-                        icon.draw(c)
-                    }
-                }
-                super.onChildDraw(c, rv, vh, dX, dY, actionState, isCurrentlyActive)
-            }
+        } catch (e: SecurityException) {
+            com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                .setMessage("削除権限がありません。メニューの「フォルダ設定」でフォルダを再選択してください。")
+                .setPositiveButton(getString(R.string.confirm_ok), null)
+                .show()
         }
-        ItemTouchHelper(callback).attachToRecyclerView(recyclerView)
+    }
+
+    private fun returnFiles(files: ArrayList<AudioFile>, autoPlay: Boolean = false) {
+        val intent = Intent()
+        intent.putExtra("files", files)
+        intent.putExtra("auto_play", autoPlay)
+        setResult(RESULT_OK, intent)
+        finish()
     }
 }
 
-class FileAdapter(
+class BrowserAdapter(
+    private val folders: List<FolderItem>,
     private val files: MutableList<AudioFile>,
     private val selectedIndices: Set<Int>,
-    private val onItemClick: (Int) -> Unit
-) : RecyclerView.Adapter<FileAdapter.ViewHolder>() {
+    private val durationMap: Map<String, String>,
+    private val onFolderClick: (FolderItem) -> Unit,
+    private val onFolderAddClick: (FolderItem) -> Unit,
+    private val onFileClick: (Int) -> Unit,
+    private val onFileLongClick: (Int) -> Unit
+) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
-    class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
-        val tvFileName: TextView = view.findViewById(R.id.tvFileName)
-        val tvFileFormat: TextView = view.findViewById(R.id.tvFileFormat)
-        val tvFileSize: TextView = view.findViewById(R.id.tvFileSize)
-        val cbSelected: CheckBox = view.findViewById(R.id.cbSelected)
+    companion object {
+        private const val TYPE_FOLDER = 0
+        private const val TYPE_FILE = 1
     }
 
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
-        val view = LayoutInflater.from(parent.context).inflate(R.layout.item_file, parent, false)
-        return ViewHolder(view)
+    override fun getItemViewType(position: Int) =
+        if (position < folders.size) TYPE_FOLDER else TYPE_FILE
+
+    override fun getItemCount() = folders.size + files.size
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+        val inflater = LayoutInflater.from(parent.context)
+        return if (viewType == TYPE_FOLDER)
+            FolderViewHolder(inflater.inflate(R.layout.item_folder, parent, false))
+        else
+            FileViewHolder(inflater.inflate(R.layout.item_file, parent, false))
     }
 
-    override fun onBindViewHolder(holder: ViewHolder, position: Int) {
-        val file = files[position]
-        holder.tvFileName.text = file.name
-        holder.tvFileFormat.text = file.format
-        holder.tvFileSize.text = file.size
-        holder.cbSelected.isChecked = selectedIndices.contains(position)
-        holder.itemView.setOnClickListener { onItemClick(holder.bindingAdapterPosition) }
+    override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+        if (position < folders.size) {
+            val folder = folders[position]
+            (holder as FolderViewHolder).bind(folder)
+            holder.itemView.setOnClickListener { onFolderClick(folder) }
+            holder.btnFolderAdd.setOnClickListener { onFolderAddClick(folder) }
+        } else {
+            val fileIndex = position - folders.size
+            val file = files[fileIndex]
+            val duration = durationMap[file.uri] ?: ""
+            (holder as FileViewHolder).bind(file, duration, selectedIndices.contains(fileIndex))
+            holder.itemView.setOnClickListener { onFileClick(fileIndex) }
+            holder.itemView.setOnLongClickListener { onFileLongClick(fileIndex); true }
+        }
     }
 
-    override fun getItemCount() = files.size
+    class FolderViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+        private val tvFolderName: TextView = view.findViewById(R.id.tvFolderName)
+        val btnFolderAdd: ImageButton = view.findViewById(R.id.btnFolderAdd)
+        fun bind(folder: FolderItem) { tvFolderName.text = folder.name }
+    }
+
+    class FileViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+        private val tvFileName: TextView = view.findViewById(R.id.tvFileName)
+        private val tvFileFormat: TextView = view.findViewById(R.id.tvFileFormat)
+        private val tvFileDuration: TextView = view.findViewById(R.id.tvFileDuration)
+        private val cbSelected: CheckBox = view.findViewById(R.id.cbSelected)
+        fun bind(file: AudioFile, duration: String, selected: Boolean) {
+            tvFileName.text = file.name
+            tvFileFormat.text = file.format
+            tvFileDuration.text = duration
+            cbSelected.isChecked = selected
+        }
+    }
 }

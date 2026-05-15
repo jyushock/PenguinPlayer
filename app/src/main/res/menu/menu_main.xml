@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <item
+        android:id="@+id/action_folder_settings"
+        android:title="@string/folder_settings"
+        android:icon="@android:drawable/ic_menu_preferences"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_sort_playlist"
+        android:title="@string/playlist_sort"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_clear_playlist"
+        android:title="@string/playlist_clear"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_sleep_timer"
+        android:title="@string/sleep_timer"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_resume_settings"
+        android:title="@string/resume_settings"
+        app:showAsAction="never" />
+
+</menu>
